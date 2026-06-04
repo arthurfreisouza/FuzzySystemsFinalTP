@@ -1,5 +1,5 @@
 # 1. Configurar workspace
-az ml workspace set -w <workspace-name> -g <resource-group>
+az configure --defaults group=rg-ArthurFuzzy-dev workspace=mlw-ArthurFuzzy-dev
 
 # 2. Registrar o modelo
 az ml model create \
@@ -24,19 +24,27 @@ az ml online-deployment create \
   --endpoint-name anfis-bc-endpoint \
   --all-traffic
 
-# 6. Testar
+# 6. Testar entedpoint
 az ml online-endpoint invoke \
   -n anfis-bc-endpoint \
   --request-file test_request.json
 
 
-
-
 # 7
-az ml online-endpoint create --file endpoint.yml
-az ml online-deployment create --file deployment.yml --all-traffic
-az ml online-endpoint invoke --name anfis-breast-cancer-endpoint --request-file test_request.json
-Formato de entrada
+
+POST REQUESTS
+
+{
+  "data": [
+    [12.75, 16.70, 82.51, 493.79, 0.11, 0.11, 0.03, 0.02, 0.21, 0.06, 0.38,
+    1.00, 2.49, 28.62, 0.00, 0.01, 0.01, 0.00, 0.01, 0.00, 14.44, 21.73, 93.62,
+    624.09, 0.14, 0.19, 0.14, 0.08, 0.30, 0.08]
+  ]
+}
+Formato de saída
+{"predictions": [1], "labels": ["Benign"]}
+
+
 {
   "data": [
     [17.99, 10.38, 122.8, 1001.0, 0.1184, 0.2776, 0.3001, 0.1471, 0.2419, 0.07871,
@@ -46,3 +54,24 @@ Formato de entrada
 }
 Formato de saída
 {"predictions": [0], "labels": ["Malignant"]}
+
+
+curl --request POST   --url https://mlw-arthurfuzzy-dev-hstqr.eastus.inference.ml.azure.com/score   --header 'Content-Type: application/json'   --header 'Authorization: Bearer '   --data '{
+    "data": [[12.75, 16.700000762939453, 82.51000213623047, 493.79998779296875, 0.11249999701976776, 0.11169999837875366, 0.03880000114440918, 0.02995000034570694, 0.21199999749660492, 0.06622999906539917, 0.38339999318122864, 1.003000020980835, 2.494999885559082, 28.6200008392334, 0.0075090001337230206, 0.015610000118613243, 0.019770000129938126, 0.009198999963700771, 0.018050000071525574, 0.003628999926149845, 14.449999809265137, 21.739999771118164, 93.62999725341797, 624.0999755859375, 0.14749999344348907, 0.19789999723434448, 0.14229999482631683, 0.08044999837875366, 0.30709999799728394, 0.08557000011205673]]
+  }'
+
+
+
+
+
+
+
+
+DELETING ENDPOINT/ UPDATING QUOTA: 
+az ml online-deployment delete --name anfis-breast-cancer-1 --endpoint-name mlw-arthurfuzzy-dev-hstqr --yes
+
+
+az quota update \
+  --resource-name standardDSv2Family \
+  --scope /subscriptions/<subs>/providers/Microsoft.Compute/locations/eastus \
+  --limit-object value=20

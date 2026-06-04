@@ -55,7 +55,7 @@ config = None
 
 def init():
     global model, scaler, feat_sel, selected_indices, config
-    model_dir = Path(os.environ["AZUREML_MODEL_DIR"])
+    model_dir = Path(os.environ["AZUREML_MODEL_DIR"]) / "model_artifacts"
     with open(model_dir / "model_config.json") as f:
         config = json.load(f)
     scaler           = joblib.load(model_dir / "scaler.pkl")
