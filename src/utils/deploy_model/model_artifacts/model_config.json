@@ -1,0 +1,24 @@
+{
+  "num_rules": 3,
+  "mf_type": "gauss",
+  "num_features": 10,
+  "n_features_in": 30,
+  "threshold": 0.5,
+  "test_accuracy": 0.958042,
+  "label_encoding": {
+    "M": 0,
+    "B": 1
+  },
+  "feature_names": [
+    "area_mean",
+    "compactness_mean",
+    "concavity_mean",
+    "concave_points_mean",
+    "perimeter_se",
+    "area_se",
+    "texture_worst",
+    "compactness_worst",
+    "concavity_worst",
+    "concave_points_worst"
+  ]
+}

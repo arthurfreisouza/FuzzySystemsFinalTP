@@ -1,0 +1,14 @@
+name: anfis-env
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - torch>=2.0
+    - scikit-learn>=1.3
+    - numpy>=1.24
+    - joblib>=1.3
+    - azureml-inference-server-http
