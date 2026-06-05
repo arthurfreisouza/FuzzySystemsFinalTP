@@ -193,6 +193,7 @@ stages:
                 if [ -z "$EXISTING" ]; then
                   echo "Endpoint not found — creating..."
                   az ml online-endpoint create \
+                    --name "${{ parameters.endpointName }}" \
                     --file "$(Pipeline.Workspace)/model-files/endpoint.yml" \
                     --resource-group ${{ parameters.resourceGroup }} \
                     --workspace-name ${{ parameters.workspaceName }}
