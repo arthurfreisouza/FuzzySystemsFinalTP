@@ -21,15 +21,21 @@ parameters:
     displayName: "Instance Type"
     type: string
     default: 'Standard_D2as_v4'
+  - name: resourceGroup
+    displayName: "Azure Resource Group"
+    type: string
+    default: 'rg-ArthurFuzzy-dev'
+  - name: workspaceName
+    displayName: "AzureML Workspace Name"
+    type: string
+    default: 'mlw-ArthurFuzzy-dev'
+  - name: storageAccount
+    displayName: "Storage Account Name (for artifacts)"
+    type: string
+    default: 'starthurfuzzy2dev'
 
 variables:
   - group: Arthur_VG
-  - name: resourceGroup
-    value: 'rg-ArthurFuzzy-dev'
-  - name: workspaceName
-    value: 'mlw-ArthurFuzzy-dev'
-  - name: storageAccount
-    value: 'starthurfuzzy2dev'
   - name: blobContainer
     value: 'azure-files'
 
@@ -57,7 +63,7 @@ stages:
                 mkdir -p "$DEST"
 
                 az storage blob download-batch \
-                  --account-name $(storageAccount) \
+                  --account-name ${{ parameters.storageAccount }} \
                   --source $(blobContainer) \
                   --destination "$DEST" \
                   --auth-mode login
@@ -102,8 +108,8 @@ stages:
                   --path "$MODEL_DIR" \
                   --type custom_model \
                   --version "$VERSION" \
-                  --resource-group $(resourceGroup) \
-                  --workspace-name $(workspaceName) \
+                  --resource-group ${{ parameters.resourceGroup }} \
+                  --workspace-name ${{ parameters.workspaceName }} \
                   --query version -o tsv 2>/dev/null || echo "$VERSION")
 
                 echo "Model '${{ parameters.modelName }}' registered — version: $MODEL_VERSION"
@@ -142,8 +148,8 @@ stages:
                   --conda-file "$CONDA_FILE" \
                   --image mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04 \
                   --version "$VERSION" \
-                  --resource-group $(resourceGroup) \
-                  --workspace-name $(workspaceName) \
+                  --resource-group ${{ parameters.resourceGroup }} \
+                  --workspace-name ${{ parameters.workspaceName }} \
                   --query version -o tsv 2>/dev/null || echo "$VERSION")
 
                 echo "Environment '${{ parameters.environmentName }}' ready — version: $ENV_VERSION"
@@ -180,16 +186,16 @@ stages:
                 set -euo pipefail
                 EXISTING=$(az ml online-endpoint show \
                   --name "${{ parameters.endpointName }}" \
-                  --resource-group $(resourceGroup) \
-                  --workspace-name $(workspaceName) \
+                  --resource-group ${{ parameters.resourceGroup }} \
+                  --workspace-name ${{ parameters.workspaceName }} \
                   --query name -o tsv 2>/dev/null || echo "")
 
                 if [ -z "$EXISTING" ]; then
                   echo "Endpoint not found — creating..."
                   az ml online-endpoint create \
                     --file "$(Pipeline.Workspace)/model-files/endpoint.yml" \
-                    --resource-group $(resourceGroup) \
-                    --workspace-name $(workspaceName)
+                    --resource-group ${{ parameters.resourceGroup }} \
+                    --workspace-name ${{ parameters.workspaceName }}
                 else
                   echo "Endpoint '${{ parameters.endpointName }}' already exists — skipping create."
                 fi
@@ -229,8 +235,8 @@ stages:
                 az ml online-deployment create \
                   --file /tmp/deployment-generated.yml \
                   --all-traffic \
-                  --resource-group $(resourceGroup) \
-                  --workspace-name $(workspaceName)
+                  --resource-group ${{ parameters.resourceGroup }} \
+                  --workspace-name ${{ parameters.workspaceName }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # STAGE 5 — Smoke test: invoke the live endpoint and validate the response
@@ -258,8 +264,8 @@ stages:
                 RESULT=$(az ml online-endpoint invoke \
                   --name "${{ parameters.endpointName }}" \
                   --request-file "$(Pipeline.Workspace)/model-files/test_request.json" \
-                  --resource-group $(resourceGroup) \
-                  --workspace-name $(workspaceName))
+                  --resource-group ${{ parameters.resourceGroup }} \
+                  --workspace-name ${{ parameters.workspaceName }})
 
                 echo "=== Endpoint response ==="
                 echo "$RESULT"
