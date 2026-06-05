@@ -1,0 +1,4 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+name: anfis-breast-cancer-endpoint
+description: "Online endpoint for WDBC ANFIS classification"
+auth_mode: key

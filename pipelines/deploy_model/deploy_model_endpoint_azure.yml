@@ -1,0 +1,272 @@
+trigger: none
+
+parameters:
+  - name: modelName
+    displayName: "Model Name in AzureML Registry"
+    type: string
+    default: 'anfis-breast-cancer'
+  - name: endpointName
+    displayName: "Online Endpoint Name"
+    type: string
+    default: 'anfis-breast-cancer-endpoint'
+  - name: deploymentName
+    displayName: "Deployment Name"
+    type: string
+    default: 'blue'
+  - name: environmentName
+    displayName: "AzureML Environment Name"
+    type: string
+    default: 'anfis-env'
+  - name: instanceType
+    displayName: "Instance Type"
+    type: string
+    default: 'Standard_D2as_v4'
+
+variables:
+  - group: Arthur_VG
+  - name: resourceGroup
+    value: 'rg-ArthurFuzzy-dev'
+  - name: workspaceName
+    value: 'mlw-ArthurFuzzy-dev'
+  - name: storageAccount
+    value: 'starthurfuzzy2dev'
+  - name: blobContainer
+    value: 'azure-files'
+
+stages:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STAGE 1 — Pull everything from the Storage Account blob container
+  # ─────────────────────────────────────────────────────────────────────────────
+  - stage: DownloadArtifacts
+    displayName: '1 — Download Artifacts from Blob Storage'
+    jobs:
+      - job: DownloadBlob
+        displayName: 'Pull model files from Storage Account'
+        steps:
+          - checkout: none
+
+          - task: AzureCLI@2
+            displayName: 'az storage blob download-batch'
+            inputs:
+              azureSubscription: '$(service_conn)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+                DEST="$(Build.ArtifactStagingDirectory)/artifacts"
+                mkdir -p "$DEST"
+
+                az storage blob download-batch \
+                  --account-name $(storageAccount) \
+                  --source $(blobContainer) \
+                  --destination "$DEST" \
+                  --auth-mode login
+
+                echo "=== Downloaded files ==="
+                find "$DEST" -type f | sort
+
+          - publish: $(Build.ArtifactStagingDirectory)/artifacts
+            artifact: model-files
+            displayName: 'Publish downloaded artifacts'
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STAGE 2 — Register the model artifacts in Azure ML
+  # Runs in parallel with Stage 3 (both depend only on Stage 1)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - stage: RegisterModel
+    displayName: '2 — Register Model in Azure ML'
+    dependsOn: DownloadArtifacts
+    jobs:
+      - job: Register
+        displayName: 'az ml model create'
+        steps:
+          - checkout: none
+
+          - download: current
+            artifact: model-files
+
+          - task: AzureCLI@2
+            displayName: 'Register model (version = Build ID)'
+            name: registerStep
+            inputs:
+              azureSubscription: '$(service_conn)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+                MODEL_DIR="$(Pipeline.Workspace)/model-files/model_artifacts"
+                VERSION="$(Build.BuildId)"
+
+                MODEL_VERSION=$(az ml model create \
+                  --name "${{ parameters.modelName }}" \
+                  --path "$MODEL_DIR" \
+                  --type custom_model \
+                  --version "$VERSION" \
+                  --resource-group $(resourceGroup) \
+                  --workspace-name $(workspaceName) \
+                  --query version -o tsv 2>/dev/null || echo "$VERSION")
+
+                echo "Model '${{ parameters.modelName }}' registered — version: $MODEL_VERSION"
+                echo "##vso[task.setvariable variable=modelVersion;isOutput=true]$MODEL_VERSION"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STAGE 3 — Create (or reuse) the AzureML conda environment
+  # Runs in parallel with Stage 2
+  # ─────────────────────────────────────────────────────────────────────────────
+  - stage: CreateEnvironment
+    displayName: '3 — Create AzureML Environment'
+    dependsOn: DownloadArtifacts
+    jobs:
+      - job: CreateEnv
+        displayName: 'az ml environment create'
+        steps:
+          - checkout: none
+
+          - download: current
+            artifact: model-files
+
+          - task: AzureCLI@2
+            displayName: 'Create environment from conda.yml (version = Build ID)'
+            name: envStep
+            inputs:
+              azureSubscription: '$(service_conn)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+                CONDA_FILE="$(Pipeline.Workspace)/model-files/conda.yml"
+                VERSION="$(Build.BuildId)"
+
+                ENV_VERSION=$(az ml environment create \
+                  --name "${{ parameters.environmentName }}" \
+                  --conda-file "$CONDA_FILE" \
+                  --image mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04 \
+                  --version "$VERSION" \
+                  --resource-group $(resourceGroup) \
+                  --workspace-name $(workspaceName) \
+                  --query version -o tsv 2>/dev/null || echo "$VERSION")
+
+                echo "Environment '${{ parameters.environmentName }}' ready — version: $ENV_VERSION"
+                echo "##vso[task.setvariable variable=envVersion;isOutput=true]$ENV_VERSION"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STAGE 4 — Create endpoint (idempotent) then create the deployment
+  # Waits for both Stage 2 and Stage 3 to pass
+  # ─────────────────────────────────────────────────────────────────────────────
+  - stage: DeployEndpoint
+    displayName: '4 — Deploy Online Endpoint'
+    dependsOn:
+      - RegisterModel
+      - CreateEnvironment
+    jobs:
+      - job: Deploy
+        displayName: 'Create endpoint + deployment'
+        variables:
+          modelVersion: $[ stageDependencies.RegisterModel.Register.outputs['registerStep.modelVersion'] ]
+          envVersion: $[ stageDependencies.CreateEnvironment.CreateEnv.outputs['envStep.envVersion'] ]
+        steps:
+          - checkout: none
+
+          - download: current
+            artifact: model-files
+
+          - task: AzureCLI@2
+            displayName: '1. Create online endpoint (skip if exists)'
+            inputs:
+              azureSubscription: '$(service_conn)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+                EXISTING=$(az ml online-endpoint show \
+                  --name "${{ parameters.endpointName }}" \
+                  --resource-group $(resourceGroup) \
+                  --workspace-name $(workspaceName) \
+                  --query name -o tsv 2>/dev/null || echo "")
+
+                if [ -z "$EXISTING" ]; then
+                  echo "Endpoint not found — creating..."
+                  az ml online-endpoint create \
+                    --file "$(Pipeline.Workspace)/model-files/endpoint.yml" \
+                    --resource-group $(resourceGroup) \
+                    --workspace-name $(workspaceName)
+                else
+                  echo "Endpoint '${{ parameters.endpointName }}' already exists — skipping create."
+                fi
+
+          - task: AzureCLI@2
+            displayName: '2. Generate deployment YAML and deploy'
+            inputs:
+              azureSubscription: '$(service_conn)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+                MODEL_VER="$(modelVersion)"
+                ENV_VER="$(envVersion)"
+                SCORING_DIR="/tmp/scoring_code_$(Build.BuildId)"
+
+                # isolate only score.py so AzureML doesn't upload unneeded files
+                mkdir -p "$SCORING_DIR"
+                cp "$(Pipeline.Workspace)/model-files/score.py" "$SCORING_DIR/"
+
+                cat > /tmp/deployment-generated.yml << EOF
+                \$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+                name: ${{ parameters.deploymentName }}
+                endpoint_name: ${{ parameters.endpointName }}
+                model: azureml:${{ parameters.modelName }}:${MODEL_VER}
+                code_configuration:
+                  code: ${SCORING_DIR}
+                  scoring_script: score.py
+                environment: azureml:${{ parameters.environmentName }}:${ENV_VER}
+                instance_type: ${{ parameters.instanceType }}
+                instance_count: 1
+                EOF
+
+                echo "=== Generated deployment.yml ==="
+                cat /tmp/deployment-generated.yml
+
+                az ml online-deployment create \
+                  --file /tmp/deployment-generated.yml \
+                  --all-traffic \
+                  --resource-group $(resourceGroup) \
+                  --workspace-name $(workspaceName)
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STAGE 5 — Smoke test: invoke the live endpoint and validate the response
+  # ─────────────────────────────────────────────────────────────────────────────
+  - stage: SmokeTest
+    displayName: '5 — Smoke Test'
+    dependsOn: DeployEndpoint
+    jobs:
+      - job: SmokeTest
+        displayName: 'Invoke endpoint with test payload'
+        steps:
+          - checkout: none
+
+          - download: current
+            artifact: model-files
+
+          - task: AzureCLI@2
+            displayName: 'Invoke endpoint and validate response'
+            inputs:
+              azureSubscription: '$(service_conn)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -euo pipefail
+                RESULT=$(az ml online-endpoint invoke \
+                  --name "${{ parameters.endpointName }}" \
+                  --request-file "$(Pipeline.Workspace)/model-files/test_request.json" \
+                  --resource-group $(resourceGroup) \
+                  --workspace-name $(workspaceName))
+
+                echo "=== Endpoint response ==="
+                echo "$RESULT"
+
+                echo "$RESULT" | python3 -c "
+                import sys, json
+                r = json.loads(sys.stdin.read())
+                assert 'predictions' in r and 'labels' in r, f'Unexpected response shape: {r}'
+                print('Smoke test PASSED:', r)
+                "
